@@ -30,8 +30,8 @@ state = {
         "b_current": 0,
         "c_current": 0,
         "total_current": 0,
-        "total_energy": 0.0,     # import (kWh)
-        "total_returned": 0.0,   # export (kWh)
+        "total_energy": 0.0,
+        "total_returned": 0.0,
         "total_power_factor": 1,
     },
     "gas:0": {
@@ -42,15 +42,16 @@ state = {
 }
 
 def get_lan_ip():
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("8.8.8.8", 80))
         ip = s.getsockname()[0]
-    finally:
         s.close()
-    return ip
+        return ip
+    except Exception:
+        return "127.0.0.1"
 
-# Poller: haal HW P1 data op
+# Poller
 async def poller():
     async with httpx.AsyncClient() as client:
         while True:
@@ -61,7 +62,6 @@ async def poller():
                 # WiFi
                 state["wifi_sta"]["ssid"] = hw.get("wifi_ssid", "emu")
                 strength = hw.get("wifi_strength", 100)
-                # rssi ~ -30 (sterk) tot -90 (zwak)
                 state["wifi_sta"]["rssi"] = -30 - int((100 - strength) * 0.6)
 
                 # Vermogen
@@ -71,14 +71,10 @@ async def poller():
                 state["em:0"]["a_act_power"] = per_phase
                 state["em:0"]["b_act_power"] = per_phase
                 state["em:0"]["c_act_power"] = per_phase
-
-                # Stroom (I = P / U)
-                state["em:0"]["a_current"] = state["em:0"]["a_act_power"] / 230
-                state["em:0"]["b_current"] = state["em:0"]["b_act_power"] / 230
-                state["em:0"]["c_current"] = state["em:0"]["c_act_power"] / 230
+                state["em:0"]["a_current"] = per_phase / 230
+                state["em:0"]["b_current"] = per_phase / 230
+                state["em:0"]["c_current"] = per_phase / 230
                 state["em:0"]["total_current"] = total_power / 230
-
-                # Energie totalen
                 state["em:0"]["total_energy"] = hw.get("total_power_import_kwh", 0.0)
                 state["em:0"]["total_returned"] = hw.get("total_power_export_kwh", 0.0)
 
@@ -90,29 +86,19 @@ async def poller():
                 print(f"Poller error: {e}")
             await asyncio.sleep(POLL_INTERVAL)
 
-# REST endpoints
+# --- API endpoints ---
 @app.get("/status")
 async def get_status():
     return {
         "wifi_sta": state["wifi_sta"],
         "emeters": [
-            {
-                "power": state["em:0"]["a_act_power"],
-                "voltage": state["em:0"]["a_voltage"],
-                "current": state["em:0"]["a_current"],
-                "total": state["em:0"]["total_energy"],
-                "returned": state["em:0"]["total_returned"]
-            },
-            {
-                "power": state["em:0"]["b_act_power"],
-                "voltage": state["em:0"]["b_voltage"],
-                "current": state["em:0"]["b_current"]
-            },
-            {
-                "power": state["em:0"]["c_act_power"],
-                "voltage": state["em:0"]["c_voltage"],
-                "current": state["em:0"]["c_current"]
-            }
+            {"power": state["em:0"]["a_act_power"], "voltage": state["em:0"]["a_voltage"],
+             "current": state["em:0"]["a_current"], "total": state["em:0"]["total_energy"],
+             "returned": state["em:0"]["total_returned"]},
+            {"power": state["em:0"]["b_act_power"], "voltage": state["em:0"]["b_voltage"],
+             "current": state["em:0"]["b_current"]},
+            {"power": state["em:0"]["c_act_power"], "voltage": state["em:0"]["c_voltage"],
+             "current": state["em:0"]["c_current"]}
         ],
         "total_power": state["em:0"]["total_act_power"],
         "gas": state["gas:0"]
@@ -126,9 +112,22 @@ async def rpc_status():
         "gas:0": state["gas:0"]
     }
 
-# CoAP announce (Victron discovery)
+@app.get("/rpc/Shelly.GetDeviceInfo")
+async def rpc_device_info():
+    return {
+        "id": DEVICE_NAME,
+        "model": "SHEM-3",
+        "mac": "DE:AD:BE:EF:00:01",
+        "app": "EM",
+        "ver": "20230905-123456/0.0.1@emu",
+        "fw_id": "20230905-123456",
+        "name": DEVICE_NAME,
+        "discoverable": True
+    }
+
+# --- CoAP announce ---
 async def coap_announce():
-    context = await aiocoap.Context.create_client_context()
+    protocol = await aiocoap.Context.create_client_context()
     payload = {
         "id": DEVICE_NAME,
         "model": "SHEM-3",
@@ -138,23 +137,19 @@ async def coap_announce():
     announce_bytes = json.dumps(payload).encode("utf-8")
     while True:
         try:
-            request = aiocoap.Message(
-                code=aiocoap.POST,
-                payload=announce_bytes,
-                uri="coap://224.0.1.187:5683/announce"
-            )
-            context.send_message(request)  # fire & forget
+            msg = aiocoap.Message(code=aiocoap.POST, payload=announce_bytes)
+            msg.set_request_uri("coap://224.0.1.187:5683/announce")
+            protocol.sendto(msg)   # werkt in aiocoap 0.4.x
             print("Sent CoAP announce")
         except Exception as e:
             print(f"CoAP error: {e}")
         await asyncio.sleep(30)
 
-# Startup
+# --- Startup ---
 @app.on_event("startup")
 async def startup_event():
     asyncio.create_task(poller())
 
-    # mDNS
     try:
         zeroconf = Zeroconf()
         ip = socket.inet_aton(get_lan_ip())

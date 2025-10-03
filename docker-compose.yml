@@ -1,14 +1,13 @@
-version: "3.8"
+version: "3.9"
 services:
-  shelly-em-emulator:
+  shelly-emulator:
     build: .
-    container_name: shelly_em_emulator
+    container_name: shelly-emulator
     environment:
-      - HOMEWIZARD_HOST=192.168.2.218   # <-- IP van je HomeWizard P1
+      - HOMEWIZARD_HOST=192.168.2.218   # <-- aanpassen
       - POLL_INTERVAL=2
       - HTTP_PORT=8080
       - DEVICE_NAME=ShellyEM-EMU
     ports:
       - "8080:8080"
     restart: unless-stopped
-

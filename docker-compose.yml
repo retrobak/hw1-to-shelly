@@ -1,7 +1,7 @@
 version: "3.8"
 services:
   shelly-em-emulator:
-    build: ./shelly-em-emulator
+    build: .
     container_name: shelly_em_emulator
     environment:
       - HOMEWIZARD_HOST=192.168.1.50   # <- jouw HW P1 IP
@@ -11,3 +11,4 @@ services:
     ports:
       - "8080:8080"
     restart: unless-stopped
+

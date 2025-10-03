@@ -1,25 +1,13 @@
-version: '3.8'
-
+version: "3.8"
 services:
-  shelly-emulator:
-    build: .
-    container_name: shelly-pro-3em-emulator
-    restart: unless-stopped
-    ports:
-      - "8080:8080"  # Expose on port 8080, adjust if needed
+  shelly-em-emulator:
+    build: ./shelly-em-emulator
+    container_name: shelly_em_emulator
     environment:
-      # Change this to your HomeWizard P1 meter's IP address
-      - HOMEWIZARD_HOST=192.168.2.218
-      - PORT=8080
-    networks:
-      - default
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/shelly"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
-
-networks:
-  default:
-    driver: bridge
+      - HOMEWIZARD_HOST=192.168.1.50   # <- jouw HW P1 IP
+      - POLL_INTERVAL=2                # seconden
+      - HTTP_PORT=8080
+      - DEVICE_NAME=ShellyEM-EMU
+    ports:
+      - "8080:8080"
+    restart: unless-stopped

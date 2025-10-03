@@ -1,11 +1,9 @@
-FROM python:3.11-bullseye
+FROM python:3.11-slim
 
 WORKDIR /app
+RUN pip install --no-cache-dir fastapi uvicorn httpx zeroconf
 
-COPY requirements.txt .
-RUN pip install --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt
+COPY app /app
 
-COPY shelly_emulator.py .
-
-CMD ["python", "shelly_emulator.py"]
+EXPOSE 8080
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]

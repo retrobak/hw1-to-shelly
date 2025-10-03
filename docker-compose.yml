@@ -8,9 +8,6 @@ services:
       - POLL_INTERVAL=2
       - HTTP_PORT=8080
       - DEVICE_NAME=ShellyEM-EMU
-      - MQTT_HOST=192.168.1.10         # optioneel, MQTT broker IP
-      - MQTT_PORT=1883
-      - MQTT_TOPIC=shellyem-emu/status
     ports:
       - "8080:8080"
     restart: unless-stopped

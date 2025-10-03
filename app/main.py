@@ -3,7 +3,6 @@ import asyncio
 import socket
 import json
 import httpx
-import paho.mqtt.client as mqtt
 from fastapi import FastAPI
 from zeroconf import ServiceInfo, Zeroconf
 import aiocoap
@@ -13,10 +12,6 @@ HOMEWIZARD_HOST = os.getenv("HOMEWIZARD_HOST", "192.168.1.50")
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "2"))
 HTTP_PORT = int(os.getenv("HTTP_PORT", "8080"))
 DEVICE_NAME = os.getenv("DEVICE_NAME", "ShellyEM-EMU")
-
-MQTT_HOST = os.getenv("MQTT_HOST", None)
-MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
-MQTT_TOPIC = os.getenv("MQTT_TOPIC", "shellyem-emu/status")
 
 app = FastAPI()
 state = {
@@ -35,20 +30,6 @@ state = {
         "total_power_factor": 1,
     }
 }
-
-# MQTT
-mqtt_client = None
-def init_mqtt():
-    global mqtt_client
-    if not MQTT_HOST:
-        return
-    mqtt_client = mqtt.Client()
-    mqtt_client.connect(MQTT_HOST, MQTT_PORT, 60)
-    mqtt_client.loop_start()
-
-def publish_mqtt(data):
-    if mqtt_client:
-        mqtt_client.publish(MQTT_TOPIC, json.dumps(data))
 
 # Poller: haalt waarden op uit HomeWizard P1
 async def poller():

@@ -4,11 +4,13 @@ services:
     build: .
     container_name: shelly_em_emulator
     environment:
-      - HOMEWIZARD_HOST=192.168.1.50   # <- jouw HW P1 IP
-      - POLL_INTERVAL=2                # seconden
+      - HOMEWIZARD_HOST=192.168.1.50   # <-- IP van je HomeWizard P1
+      - POLL_INTERVAL=2
       - HTTP_PORT=8080
       - DEVICE_NAME=ShellyEM-EMU
+      - MQTT_HOST=192.168.1.10         # optioneel, MQTT broker IP
+      - MQTT_PORT=1883
+      - MQTT_TOPIC=shellyem-emu/status
     ports:
       - "8080:8080"
     restart: unless-stopped
-

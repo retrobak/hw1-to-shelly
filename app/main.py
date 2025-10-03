@@ -1,95 +1,136 @@
 import os
 import asyncio
-from fastapi import FastAPI
+import socket
+import json
 import httpx
-from typing import Dict
+import paho.mqtt.client as mqtt
+from fastapi import FastAPI
+from zeroconf import ServiceInfo, Zeroconf
+import aiocoap
 
+# Config
 HOMEWIZARD_HOST = os.getenv("HOMEWIZARD_HOST", "192.168.1.50")
-POLL_INTERVAL = float(os.getenv("POLL_INTERVAL", "2"))
+POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "2"))
 HTTP_PORT = int(os.getenv("HTTP_PORT", "8080"))
 DEVICE_NAME = os.getenv("DEVICE_NAME", "ShellyEM-EMU")
 
-app = FastAPI(title="Shelly EM Gen3 Emulator")
+MQTT_HOST = os.getenv("MQTT_HOST", None)
+MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
+MQTT_TOPIC = os.getenv("MQTT_TOPIC", "shellyem-emu/status")
 
+app = FastAPI()
 state = {
-    "total_power_w": 0.0,
-    "total_import_kwh": 0.0,
-    "total_export_kwh": 0.0,
-    "power_l1_w": 0.0,
-    "power_l2_w": 0.0,
-    "power_l3_w": 0.0,
-    "gas_m3": 0.0,
-    "tariff": 1
+    "em:0": {
+        "a_current": 0,
+        "b_current": 0,
+        "c_current": 0,
+        "total_current": 0,
+        "a_act_power": 0,
+        "b_act_power": 0,
+        "c_act_power": 0,
+        "total_act_power": 0,
+        "a_voltage": 230,
+        "b_voltage": 230,
+        "c_voltage": 230,
+        "total_power_factor": 1,
+    }
 }
 
-async def fetch_homewizard(client: httpx.AsyncClient) -> Dict:
-    url = f"http://{HOMEWIZARD_HOST}/api/v1/data"
-    try:
-        r = await client.get(url, timeout=5.0)
-        r.raise_for_status()
-        return r.json()
-    except Exception as e:
-        print(f"Error fetching HomeWizard: {e}")
-        return {}
+# MQTT
+mqtt_client = None
+def init_mqtt():
+    global mqtt_client
+    if not MQTT_HOST:
+        return
+    mqtt_client = mqtt.Client()
+    mqtt_client.connect(MQTT_HOST, MQTT_PORT, 60)
+    mqtt_client.loop_start()
 
+def publish_mqtt(data):
+    if mqtt_client:
+        mqtt_client.publish(MQTT_TOPIC, json.dumps(data))
+
+# Poller: haalt waarden op uit HomeWizard P1
 async def poller():
     async with httpx.AsyncClient() as client:
         while True:
-            data = await fetch_homewizard(client)
-            if data:
-                try:
-                    state["total_power_w"] = data.get("active_power_w", 0.0)
-                    state["total_import_kwh"] = data.get("total_power_import_kwh", 0.0)
-                    state["total_export_kwh"] = data.get("total_power_export_kwh", 0.0)
-                    state["tariff"] = data.get("active_tariff", 1)
-                    state["gas_m3"] = data.get("total_gas_m3", 0.0)
-
-                    # Voorbereiding voor 3 fasen support:
-                    state["power_l1_w"] = data.get("active_power_l1_w", 0.0)
-                    state["power_l2_w"] = data.get("active_power_l2_w", 0.0)
-                    state["power_l3_w"] = data.get("active_power_l3_w", 0.0)
-
-                except Exception as e:
-                    print(f"Parse error: {e}")
+            try:
+                resp = await client.get(f"http://{HOMEWIZARD_HOST}/api/v1/data")
+                hw = resp.json()
+                # Mapping naar Shelly velden
+                total_power = hw.get("active_power_w", 0)
+                state["em:0"]["total_act_power"] = total_power
+                state["em:0"]["a_act_power"] = total_power / 3
+                state["em:0"]["b_act_power"] = total_power / 3
+                state["em:0"]["c_act_power"] = total_power / 3
+                state["em:0"]["total_current"] = total_power / 230
+                publish_mqtt(state)
+            except Exception as e:
+                print(f"Poller error: {e}")
             await asyncio.sleep(POLL_INTERVAL)
 
-@app.on_event("startup")
-async def startup_event():
-    asyncio.create_task(poller())
-
+# REST endpoints
 @app.get("/status")
 async def get_status():
-    """
-    Shelly-achtige status endpoint.
-    """
     return {
-        "device": DEVICE_NAME,
-        "emulated": "shelly_em_gen3",
-        "total_power_w": state["total_power_w"],
-        "channels": {
-            "total_import_kwh": state["total_import_kwh"],
-            "total_export_kwh": state["total_export_kwh"],
-            "l1_power_w": state["power_l1_w"],
-            "l2_power_w": state["power_l2_w"],
-            "l3_power_w": state["power_l3_w"],
-        },
-        "gas_m3": state["gas_m3"],
-        "tariff": state["tariff"]
+        "wifi_sta": {"connected": True, "ssid": "emu", "rssi": -50},
+        "emeters": [
+            {"power": state["em:0"]["a_act_power"]},
+            {"power": state["em:0"]["b_act_power"]},
+            {"power": state["em:0"]["c_act_power"]}
+        ],
+        "total_power": state["em:0"]["total_act_power"]
     }
 
 @app.get("/rpc/Shelly.GetStatus")
-async def shelly_rpc_status():
-    """
-    Nabootsing van Shelly RPC status API.
-    """
-    return {
-        "emeters": [
-            {"id": 0, "power": state["power_l1_w"], "total": state["total_import_kwh"]},
-            {"id": 1, "power": state["power_l2_w"], "total": state["total_import_kwh"]},
-            {"id": 2, "power": state["power_l3_w"], "total": state["total_import_kwh"]},
-        ],
-        "total_power": state["total_power_w"],
-        "export_kwh": state["total_export_kwh"],
-        "gas_m3": state["gas_m3"],
-        "tariff": state["tariff"]
+async def rpc_status():
+    return state
+
+# CoAP announce voor Victron Venus
+async def coap_announce():
+    context = await aiocoap.Context.create_client_context()
+    payload = {
+        "id": DEVICE_NAME,
+        "model": "SHEM-3",
+        "app": "EM",
+        "ver": "20230905-123456/0.0.1@emu",
     }
+    announce_bytes = json.dumps(payload).encode("utf-8")
+    while True:
+        try:
+            request = aiocoap.Message(
+                code=aiocoap.POST,
+                payload=announce_bytes,
+                uri="coap://224.0.1.187:5683/announce"
+            )
+            await context.request(request).response
+            print("Sent CoAP announce")
+        except Exception as e:
+            print(f"CoAP error: {e}")
+        await asyncio.sleep(30)
+
+# Startup: start poller, MQTT, mDNS, CoAP
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(poller())
+    init_mqtt()
+
+    # mDNS
+    try:
+        zeroconf = Zeroconf()
+        ip = socket.inet_aton(socket.gethostbyname(socket.gethostname()))
+        info = ServiceInfo(
+            "_http._tcp.local.",
+            f"{DEVICE_NAME}._http._tcp.local.",
+            addresses=[ip],
+            port=HTTP_PORT,
+            properties={"id": "shellyem-emu", "model": "SHEM-3"},
+            server=f"{DEVICE_NAME}.local."
+        )
+        zeroconf.register_service(info)
+        print(f"mDNS registered: {DEVICE_NAME}.local:{HTTP_PORT}")
+    except Exception as e:
+        print(f"mDNS error: {e}")
+
+    # CoAP
+    asyncio.create_task(coap_announce())

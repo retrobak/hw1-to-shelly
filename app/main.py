@@ -16,6 +16,7 @@ DEVICE_NAME = os.getenv("DEVICE_NAME", "ShellyEM-EMU")
 app = FastAPI()
 
 state = {
+    "wifi_ssid": "emu",
     "em:0": {
         "a_current": 0,
         "b_current": 0,
@@ -36,6 +37,16 @@ state = {
     }
 }
 
+# Helper: LAN IP ophalen
+def get_lan_ip():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+    finally:
+        s.close()
+    return ip
+
 # Poller: haalt waarden op uit HomeWizard P1
 async def poller():
     async with httpx.AsyncClient() as client:
@@ -43,6 +54,9 @@ async def poller():
             try:
                 resp = await client.get(f"http://{HOMEWIZARD_HOST}/api/v1/data")
                 hw = resp.json()
+
+                # Wifi SSID
+                state["wifi_ssid"] = hw.get("wifi_ssid", "emu")
 
                 # Electriciteit
                 total_power = hw.get("active_power_w", 0)
@@ -64,7 +78,7 @@ async def poller():
 @app.get("/status")
 async def get_status():
     return {
-        "wifi_sta": {"connected": True, "ssid": "emu", "rssi": -50},
+        "wifi_sta": {"connected": True, "ssid": state["wifi_ssid"], "rssi": -50},
         "emeters": [
             {"power": state["em:0"]["a_act_power"]},
             {"power": state["em:0"]["b_act_power"]},
@@ -112,7 +126,7 @@ async def startup_event():
     # mDNS
     try:
         zeroconf = Zeroconf()
-        ip = socket.inet_aton(socket.gethostbyname(socket.gethostname()))
+        ip = socket.inet_aton(get_lan_ip())
         info = ServiceInfo(
             "_http._tcp.local.",
             f"{DEVICE_NAME}._http._tcp.local.",

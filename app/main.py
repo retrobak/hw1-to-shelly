@@ -4,7 +4,8 @@ import socket
 import json
 import httpx
 from fastapi import FastAPI
-from zeroconf import ServiceInfo, AsyncZeroconf
+from zeroconf import ServiceInfo
+from zeroconf.asyncio import AsyncZeroconf
 import aiocoap
 import platform
 import traceback
@@ -14,13 +15,13 @@ app = FastAPI()
 
 # --- Shelly Pro Model Config ---
 SHELLY_MODEL = os.getenv("SHELLY_MODEL", "SHEM-PRO-3")  # Options: SHEM-PRO-3, SHEM-PRO-EM-50
+DEVICE_NAME = os.getenv("DEVICE_NAME", "ShellyEM-EMU")
 DEVICE_ID = os.getenv("DEVICE_ID", DEVICE_NAME)  # Use DEVICE_NAME as default id
 
 # Config
 HOMEWIZARD_HOST = os.getenv("HOMEWIZARD_HOST", "192.168.1.50")
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "2"))
 HTTP_PORT = int(os.getenv("HTTP_PORT", "8080"))
-DEVICE_NAME = os.getenv("DEVICE_NAME", "ShellyEM-EMU")
 
 # --- State structure based on model ---
 if SHELLY_MODEL == "SHEM-PRO-3":

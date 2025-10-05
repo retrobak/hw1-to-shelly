@@ -6,6 +6,7 @@ import httpx
 from fastapi import FastAPI
 from zeroconf import ServiceInfo, Zeroconf
 import aiocoap
+import platform
 
 # Config
 HOMEWIZARD_HOST = os.getenv("HOMEWIZARD_HOST", "192.168.1.50")
@@ -164,6 +165,9 @@ async def startup_event():
         zeroconf.register_service(info)
         print(f"mDNS registered: {DEVICE_NAME}.local:{HTTP_PORT}")
     except Exception as e:
-        print(f"mDNS error: {e} (Note: mDNS/zeroconf may not work in Docker on Windows. Run natively or use Linux for full support.)")
+        if platform.system().lower() == "windows":
+            print(f"mDNS error: {e} (Note: mDNS/zeroconf may not work in Docker on Windows. Run natively or use Linux for full support.)")
+        else:
+            print(f"mDNS error: {e}")
 
     asyncio.create_task(coap_announce())

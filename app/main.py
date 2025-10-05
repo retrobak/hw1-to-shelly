@@ -139,7 +139,7 @@ async def coap_announce():
         try:
             msg = aiocoap.Message(code=aiocoap.POST, payload=announce_bytes)
             msg.set_request_uri("coap://224.0.1.187:5683/announce")
-            protocol.sendto(msg)   # werkt in aiocoap 0.4.x
+            await protocol.request(msg).response  # Updated for modern aiocoap
             print("Sent CoAP announce")
         except Exception as e:
             print(f"CoAP error: {e}")
@@ -164,6 +164,6 @@ async def startup_event():
         zeroconf.register_service(info)
         print(f"mDNS registered: {DEVICE_NAME}.local:{HTTP_PORT}")
     except Exception as e:
-        print(f"mDNS error: {e}")
+        print(f"mDNS error: {e} (Note: mDNS/zeroconf may not work in Docker on Windows. Run natively or use Linux for full support.)")
 
     asyncio.create_task(coap_announce())

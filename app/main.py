@@ -4,7 +4,7 @@ import socket
 import json
 import httpx
 from fastapi import FastAPI
-from zeroconf import ServiceInfo, Zeroconf
+from zeroconf import ServiceInfo, AsyncZeroconf
 import aiocoap
 import platform
 import traceback
@@ -171,7 +171,7 @@ async def startup_event():
                     print(f"  {iface}: {addr['addr']}")
         lan_ip = get_lan_ip()
         print(f"[DEBUG] Using LAN IP for mDNS: {lan_ip}")
-        zeroconf = Zeroconf(interfaces=[lan_ip])
+        async_zeroconf = AsyncZeroconf(interfaces=[lan_ip])
         ip = socket.inet_aton(lan_ip)
         print(f"[DEBUG] mDNS: Registering service with IP: {lan_ip}, Port: {HTTP_PORT}, Name: {DEVICE_NAME}")
         info = ServiceInfo(
@@ -182,7 +182,7 @@ async def startup_event():
             properties={"id": "shellyem-emu", "model": "SHEM-3"},
             server=f"{DEVICE_NAME}.local."
         )
-        zeroconf.register_service(info)
+        await async_zeroconf.async_register_service(info)
         print(f"mDNS registered: {DEVICE_NAME}.local:{HTTP_PORT}")
     except Exception as e:
         print(f"[ERROR] mDNS error: {e}")

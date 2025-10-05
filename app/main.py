@@ -15,22 +15,27 @@ POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "2"))
 HTTP_PORT = int(os.getenv("HTTP_PORT", "8080"))
 DEVICE_NAME = os.getenv("DEVICE_NAME", "ShellyEM-EMU")
 
-app = FastAPI()
+# --- Shelly Pro Model Config ---
+SHELLY_MODEL = os.getenv("SHELLY_MODEL", "SHEM-PRO-3")  # Options: SHEM-PRO-3, SHEM-PRO-EM-50
+SHELLY_MODEL_NAME = {
+    "SHEM-PRO-3": "Shelly Pro 3EM",
+    "SHEM-PRO-EM-50": "Shelly PRO EM-50"
+}[SHELLY_MODEL]
+
+# --- State structure based on model ---
+if SHELLY_MODEL == "SHEM-PRO-3":
+    PHASES = ["a", "b", "c"]
+else:
+    PHASES = ["a"]
 
 state = {
     "wifi_sta": {"connected": True, "ssid": "emu", "rssi": -50},
     "em:0": {
         "id": 0,
-        "a_voltage": 230,
-        "b_voltage": 230,
-        "c_voltage": 230,
-        "a_act_power": 0,
-        "b_act_power": 0,
-        "c_act_power": 0,
+        **{f"{p}_voltage": 230 for p in PHASES},
+        **{f"{p}_act_power": 0 for p in PHASES},
+        **{f"{p}_current": 0 for p in PHASES},
         "total_act_power": 0,
-        "a_current": 0,
-        "b_current": 0,
-        "c_current": 0,
         "total_current": 0,
         "total_energy": 0.0,
         "total_returned": 0.0,
@@ -91,17 +96,18 @@ async def poller():
 # --- API endpoints ---
 @app.get("/status")
 async def get_status():
+    emeters = []
+    for p in PHASES:
+        emeters.append({
+            "power": state["em:0"][f"{p}_act_power"],
+            "voltage": state["em:0"][f"{p}_voltage"],
+            "current": state["em:0"][f"{p}_current"]
+        })
+    emeters[0]["total"] = state["em:0"]["total_energy"]
+    emeters[0]["returned"] = state["em:0"]["total_returned"]
     return {
         "wifi_sta": state["wifi_sta"],
-        "emeters": [
-            {"power": state["em:0"]["a_act_power"], "voltage": state["em:0"]["a_voltage"],
-             "current": state["em:0"]["a_current"], "total": state["em:0"]["total_energy"],
-             "returned": state["em:0"]["total_returned"]},
-            {"power": state["em:0"]["b_act_power"], "voltage": state["em:0"]["b_voltage"],
-             "current": state["em:0"]["b_current"]},
-            {"power": state["em:0"]["c_act_power"], "voltage": state["em:0"]["c_voltage"],
-             "current": state["em:0"]["c_current"]}
-        ],
+        "emeters": emeters,
         "total_power": state["em:0"]["total_act_power"],
         "gas": state["gas:0"]
     }
@@ -118,13 +124,14 @@ async def rpc_status():
 async def rpc_device_info():
     return {
         "id": DEVICE_NAME,
-        "model": "SHEM-3",
+        "model": SHELLY_MODEL,
         "mac": "DE:AD:BE:EF:00:01",
         "app": "EM",
         "ver": "20230905-123456/0.0.1@emu",
         "fw_id": "20230905-123456",
         "name": DEVICE_NAME,
-        "discoverable": True
+        "discoverable": True,
+        "type": SHELLY_MODEL_NAME
     }
 
 # --- CoAP announce ---
@@ -132,7 +139,7 @@ async def coap_announce():
     protocol = await aiocoap.Context.create_client_context()
     payload = {
         "id": DEVICE_NAME,
-        "model": "SHEM-3",
+        "model": SHELLY_MODEL,
         "app": "EM",
         "ver": "20230905-123456/0.0.1@emu",
     }
@@ -144,7 +151,7 @@ async def coap_announce():
             msg = aiocoap.Message(code=aiocoap.POST, payload=announce_bytes)
             msg.set_request_uri("coap://224.0.1.187:5683/announce")
             print(f"[DEBUG] Sending CoAP announce to 224.0.1.187:5683/announce")
-            await protocol.request(msg).response  # Updated for modern aiocoap
+            await protocol.request(msg).response
             print("Sent CoAP announce")
         except Exception as e:
             print(f"[ERROR] CoAP error: {e}")
@@ -155,17 +162,16 @@ async def coap_announce():
 @app.on_event("startup")
 async def startup_event():
     asyncio.create_task(poller())
-
     try:
         zeroconf = Zeroconf()
         ip = socket.inet_aton(get_lan_ip())
-        print(f"[DEBUG] mDNS: Registering service with IP: {get_lan_ip()}, Port: {HTTP_PORT}, Name: {DEVICE_NAME}")
+        print(f"[DEBUG] mDNS: Registering service with IP: {get_lan_ip()}, Port: {HTTP_PORT}, Name: {DEVICE_NAME}, Model: {SHELLY_MODEL}")
         info = ServiceInfo(
             "_http._tcp.local.",
             f"{DEVICE_NAME}._http._tcp.local.",
             addresses=[ip],
             port=HTTP_PORT,
-            properties={"id": "shellyem-emu", "model": "SHEM-3"},
+            properties={"id": DEVICE_NAME, "model": SHELLY_MODEL},
             server=f"{DEVICE_NAME}.local."
         )
         zeroconf.register_service(info)
@@ -175,5 +181,4 @@ async def startup_event():
         traceback.print_exc()
         if platform.system().lower() == "windows":
             print(f"Note: mDNS/zeroconf may not work in Docker on Windows. Run natively or use Linux for full support.")
-
     asyncio.create_task(coap_announce())

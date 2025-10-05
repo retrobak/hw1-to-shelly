@@ -7,7 +7,7 @@ services:
       - HOMEWIZARD_HOST=192.168.2.218   # <-- aanpassen
       - POLL_INTERVAL=2
       - HTTP_PORT=8080
-      - DEVICE_NAME=ShellyEM-EMU
+      - DEVICE_NAME=SHEM-PRO-EM-50
     network_mode: host
     cap_add:
       - NET_RAW

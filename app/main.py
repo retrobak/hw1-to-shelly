@@ -12,26 +12,30 @@ import netifaces
 
 app = FastAPI()
 
+# --- Shelly Pro Model Config ---
+SHELLY_MODEL = os.getenv("SHELLY_MODEL", "SHEM-PRO-3")  # Options: SHEM-PRO-3, SHEM-PRO-EM-50
+DEVICE_ID = os.getenv("DEVICE_ID", DEVICE_NAME)  # Use DEVICE_NAME as default id
+
 # Config
 HOMEWIZARD_HOST = os.getenv("HOMEWIZARD_HOST", "192.168.1.50")
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "2"))
 HTTP_PORT = int(os.getenv("HTTP_PORT", "8080"))
 DEVICE_NAME = os.getenv("DEVICE_NAME", "ShellyEM-EMU")
 
+# --- State structure based on model ---
+if SHELLY_MODEL == "SHEM-PRO-3":
+    PHASES = ["a", "b", "c"]
+else:
+    PHASES = ["a"]
+
 state = {
     "wifi_sta": {"connected": True, "ssid": "emu", "rssi": -50},
     "em:0": {
         "id": 0,
-        "a_voltage": 230,
-        "b_voltage": 230,
-        "c_voltage": 230,
-        "a_act_power": 0,
-        "b_act_power": 0,
-        "c_act_power": 0,
+        **{f"{p}_voltage": 230 for p in PHASES},
+        **{f"{p}_act_power": 0 for p in PHASES},
+        **{f"{p}_current": 0 for p in PHASES},
         "total_act_power": 0,
-        "a_current": 0,
-        "b_current": 0,
-        "c_current": 0,
         "total_current": 0,
         "total_energy": 0.0,
         "total_returned": 0.0,
@@ -123,8 +127,8 @@ async def rpc_status():
 @app.get("/rpc/Shelly.GetDeviceInfo")
 async def rpc_device_info():
     return {
-        "id": DEVICE_NAME,
-        "model": "SHEM-3",
+        "id": DEVICE_ID,
+        "model": SHELLY_MODEL,
         "mac": "DE:AD:BE:EF:00:01",
         "app": "EM",
         "ver": "20230905-123456/0.0.1@emu",
@@ -137,8 +141,8 @@ async def rpc_device_info():
 async def coap_announce():
     protocol = await aiocoap.Context.create_client_context()
     payload = {
-        "id": DEVICE_NAME,
-        "model": "SHEM-3",
+        "id": DEVICE_ID,
+        "model": SHELLY_MODEL,
         "app": "EM",
         "ver": "20230905-123456/0.0.1@emu",
     }
@@ -150,7 +154,7 @@ async def coap_announce():
             msg = aiocoap.Message(code=aiocoap.POST, payload=announce_bytes)
             msg.set_request_uri("coap://224.0.1.187:5683/announce")
             print(f"[DEBUG] Sending CoAP announce to 224.0.1.187:5683/announce")
-            await protocol.request(msg).response  # Updated for modern aiocoap
+            await protocol.request(msg).response
             print("Sent CoAP announce")
         except Exception as e:
             print(f"[ERROR] CoAP error: {e}")
@@ -173,13 +177,13 @@ async def startup_event():
         print(f"[DEBUG] Using LAN IP for mDNS: {lan_ip}")
         async_zeroconf = AsyncZeroconf(interfaces=[lan_ip])
         ip = socket.inet_aton(lan_ip)
-        print(f"[DEBUG] mDNS: Registering service with IP: {lan_ip}, Port: {HTTP_PORT}, Name: {DEVICE_NAME}")
+        print(f"[DEBUG] mDNS: Registering service with IP: {lan_ip}, Port: {HTTP_PORT}, Name: {DEVICE_NAME}, Model: {SHELLY_MODEL}, ID: {DEVICE_ID}")
         info = ServiceInfo(
             "_http._tcp.local.",
             f"{DEVICE_NAME}._http._tcp.local.",
             addresses=[ip],
             port=HTTP_PORT,
-            properties={"id": "shellyem-emu", "model": "SHEM-3"},
+            properties={"id": DEVICE_ID, "model": SHELLY_MODEL},
             server=f"{DEVICE_NAME}.local."
         )
         await async_zeroconf.async_register_service(info)

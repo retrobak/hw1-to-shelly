@@ -9,6 +9,8 @@ import aiocoap
 import platform
 import traceback
 
+app = FastAPI()
+
 # Config
 HOMEWIZARD_HOST = os.getenv("HOMEWIZARD_HOST", "192.168.1.50")
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "2"))

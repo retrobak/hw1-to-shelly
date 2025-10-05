@@ -1,57 +1,32 @@
 import os
 import asyncio
+import time
 import socket
-import json
 import httpx
-from fastapi import FastAPI
+from fastapi import FastAPI, Response, status
 from zeroconf import ServiceInfo
 from zeroconf.asyncio import AsyncZeroconf
-import aiocoap
 import platform
 import traceback
 import netifaces
 
 app = FastAPI()
 
-# --- Shelly Pro Model Config ---
-SHELLY_MODEL = os.getenv("SHELLY_MODEL", "SHEM-PRO-3")  # Options: SHEM-PRO-3, SHEM-PRO-EM-50
-DEVICE_NAME = os.getenv("DEVICE_NAME", "ShellyEM-EMU")
-DEVICE_ID = os.getenv("DEVICE_ID", DEVICE_NAME)  # Use DEVICE_NAME as default id
-
-# Config
 HOMEWIZARD_HOST = os.getenv("HOMEWIZARD_HOST", "192.168.1.50")
-POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "2"))
 HTTP_PORT = int(os.getenv("HTTP_PORT", "8080"))
+DEVICE_NAME = os.getenv("DEVICE_NAME", "P1-Proxy")
+DEVICE_ID = os.getenv("DEVICE_ID", DEVICE_NAME)
+CACHE_TTL = 3  # seconds
 
-# --- State structure based on model ---
-if SHELLY_MODEL == "SHEM-PRO-3":
-    PHASES = ["a", "b", "c"]
-else:
-    PHASES = ["a"]
-
-state = {
-    "wifi_sta": {"connected": True, "ssid": "emu", "rssi": -50},
-    "em:0": {
-        "id": 0,
-        **{f"{p}_voltage": 230 for p in PHASES},
-        **{f"{p}_act_power": 0 for p in PHASES},
-        **{f"{p}_current": 0 for p in PHASES},
-        "total_act_power": 0,
-        "total_current": 0,
-        "total_energy": 0.0,
-        "total_returned": 0.0,
-        "total_power_factor": 1,
-    },
-    "gas:0": {
-        "id": 0,
-        "total_m3": 0.0,
-        "timestamp": 0
-    }
+# Simple in-memory cache
+cache = {
+    "data": None,
+    "timestamp": 0
 }
 
+# Helper to get LAN IP
 def get_lan_ip():
     try:
-        # Try to get the first non-loopback IPv4 address
         for iface in netifaces.interfaces():
             addrs = netifaces.ifaddresses(iface)
             if netifaces.AF_INET in addrs:
@@ -64,134 +39,46 @@ def get_lan_ip():
         print(f"[ERROR] get_lan_ip: {e}")
         return "127.0.0.1"
 
-# Poller
-async def poller():
-    async with httpx.AsyncClient() as client:
-        while True:
-            try:
-                resp = await client.get(f"http://{HOMEWIZARD_HOST}/api/v1/data")
-                hw = resp.json()
+@app.get("/api/v1/data")
+async def proxy_data():
+    now = time.time()
+    # Serve from cache if not expired
+    if cache["data"] is not None and (now - cache["timestamp"] < CACHE_TTL):
+        return Response(content=cache["data"], media_type="application/json")
+    # Otherwise, fetch from HomeWizard
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(f"http://{HOMEWIZARD_HOST}/api/v1/data", timeout=5)
+            resp.raise_for_status()
+            cache["data"] = resp.text
+            cache["timestamp"] = now
+            return Response(content=resp.text, media_type="application/json")
+    except Exception as e:
+        print(f"[ERROR] Proxy fetch failed: {e}")
+        if cache["data"] is not None:
+            # Serve stale cache if available
+            return Response(content=cache["data"], media_type="application/json", status_code=status.HTTP_206_PARTIAL_CONTENT)
+        return Response(content='{"error": "Failed to fetch from HomeWizard"}', media_type="application/json", status_code=502)
 
-                # WiFi
-                state["wifi_sta"]["ssid"] = hw.get("wifi_ssid", "emu")
-                strength = hw.get("wifi_strength", 100)
-                state["wifi_sta"]["rssi"] = -30 - int((100 - strength) * 0.6)
-
-                # Vermogen
-                total_power = hw.get("active_power_w", 0)
-                per_phase = total_power / 3 if total_power else 0
-                state["em:0"]["total_act_power"] = total_power
-                state["em:0"]["a_act_power"] = per_phase
-                state["em:0"]["b_act_power"] = per_phase
-                state["em:0"]["c_act_power"] = per_phase
-                state["em:0"]["a_current"] = per_phase / 230
-                state["em:0"]["b_current"] = per_phase / 230
-                state["em:0"]["c_current"] = per_phase / 230
-                state["em:0"]["total_current"] = total_power / 230
-                state["em:0"]["total_energy"] = hw.get("total_power_import_kwh", 0.0)
-                state["em:0"]["total_returned"] = hw.get("total_power_export_kwh", 0.0)
-
-                # Gas
-                state["gas:0"]["total_m3"] = hw.get("total_gas_m3", 0.0)
-                state["gas:0"]["timestamp"] = hw.get("gas_timestamp", 0)
-
-            except Exception as e:
-                print(f"Poller error: {e}")
-            await asyncio.sleep(POLL_INTERVAL)
-
-# --- API endpoints ---
-@app.get("/status")
-async def get_status():
-    return {
-        "wifi_sta": state["wifi_sta"],
-        "emeters": [
-            {"power": state["em:0"]["a_act_power"], "voltage": state["em:0"]["a_voltage"],
-             "current": state["em:0"]["a_current"], "total": state["em:0"]["total_energy"],
-             "returned": state["em:0"]["total_returned"]},
-            {"power": state["em:0"]["b_act_power"], "voltage": state["em:0"]["b_voltage"],
-             "current": state["em:0"]["b_current"]},
-            {"power": state["em:0"]["c_act_power"], "voltage": state["em:0"]["c_voltage"],
-             "current": state["em:0"]["c_current"]}
-        ],
-        "total_power": state["em:0"]["total_act_power"],
-        "gas": state["gas:0"]
-    }
-
-@app.get("/rpc/Shelly.GetStatus")
-async def rpc_status():
-    return {
-        "wifi_sta": state["wifi_sta"],
-        "em:0": state["em:0"],
-        "gas:0": state["gas:0"]
-    }
-
-@app.get("/rpc/Shelly.GetDeviceInfo")
-async def rpc_device_info():
-    return {
-        "id": DEVICE_ID,
-        "model": SHELLY_MODEL,
-        "mac": "DE:AD:BE:EF:00:01",
-        "app": "EM",
-        "ver": "20230905-123456/0.0.1@emu",
-        "fw_id": "20230905-123456",
-        "name": DEVICE_NAME,
-        "discoverable": True
-    }
-
-# --- CoAP announce ---
-async def coap_announce():
-    protocol = await aiocoap.Context.create_client_context()
-    payload = {
-        "id": DEVICE_ID,
-        "model": SHELLY_MODEL,
-        "app": "EM",
-        "ver": "20230905-123456/0.0.1@emu",
-    }
-    announce_bytes = json.dumps(payload).encode("utf-8")
-    local_ip = get_lan_ip()
-    print(f"[DEBUG] CoAP Announce: Local IP: {local_ip}, Payload: {payload}")
-    while True:
-        try:
-            msg = aiocoap.Message(code=aiocoap.POST, payload=announce_bytes)
-            msg.set_request_uri("coap://224.0.1.187:5683/announce")
-            print(f"[DEBUG] Sending CoAP announce to 224.0.1.187:5683/announce")
-            await protocol.request(msg).response
-            print("Sent CoAP announce")
-        except Exception as e:
-            print(f"[ERROR] CoAP error: {e}")
-            traceback.print_exc()
-        await asyncio.sleep(30)
-
-# --- Startup ---
 @app.on_event("startup")
 async def startup_event():
-    asyncio.create_task(poller())
     try:
-        # Print available interfaces and IPs for debug
-        print("[DEBUG] Available network interfaces and IPs:")
-        for iface in netifaces.interfaces():
-            addrs = netifaces.ifaddresses(iface)
-            if netifaces.AF_INET in addrs:
-                for addr in addrs[netifaces.AF_INET]:
-                    print(f"  {iface}: {addr['addr']}")
+        print("[DEBUG] Starting mDNS announcement...")
         lan_ip = get_lan_ip()
-        print(f"[DEBUG] Using LAN IP for mDNS: {lan_ip}")
         async_zeroconf = AsyncZeroconf(interfaces=[lan_ip])
         ip = socket.inet_aton(lan_ip)
-        print(f"[DEBUG] mDNS: Registering service with IP: {lan_ip}, Port: {HTTP_PORT}, Name: {DEVICE_NAME}, Model: {SHELLY_MODEL}, ID: {DEVICE_ID}")
         info = ServiceInfo(
             "_http._tcp.local.",
             f"{DEVICE_NAME}._http._tcp.local.",
             addresses=[ip],
             port=HTTP_PORT,
-            properties={"id": DEVICE_ID, "model": SHELLY_MODEL},
+            properties={"id": DEVICE_ID, "type": "p1-proxy"},
             server=f"{DEVICE_NAME}.local."
         )
         await async_zeroconf.async_register_service(info)
-        print(f"mDNS registered: {DEVICE_NAME}.local:{HTTP_PORT}")
+        print(f"[DEBUG] mDNS registered: {DEVICE_NAME}.local:{HTTP_PORT}")
     except Exception as e:
         print(f"[ERROR] mDNS error: {e}")
         traceback.print_exc()
         if platform.system().lower() == "windows":
             print(f"Note: mDNS/zeroconf may not work in Docker on Windows. Run natively or use Linux for full support.")
-    asyncio.create_task(coap_announce())

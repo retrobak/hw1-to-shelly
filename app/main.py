@@ -10,13 +10,13 @@ import platform
 import traceback
 import netifaces
 
+app = FastAPI()
+
 # Config
 HOMEWIZARD_HOST = os.getenv("HOMEWIZARD_HOST", "192.168.1.50")
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "2"))
 HTTP_PORT = int(os.getenv("HTTP_PORT", "8080"))
 DEVICE_NAME = os.getenv("DEVICE_NAME", "ShellyEM-EMU")
-
-app = FastAPI()
 
 state = {
     "wifi_sta": {"connected": True, "ssid": "emu", "rssi": -50},

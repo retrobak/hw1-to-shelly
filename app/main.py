@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from zeroconf import ServiceInfo, Zeroconf
 import aiocoap
 import platform
+import traceback
 
 # Config
 HOMEWIZARD_HOST = os.getenv("HOMEWIZARD_HOST", "192.168.1.50")
@@ -136,14 +137,18 @@ async def coap_announce():
         "ver": "20230905-123456/0.0.1@emu",
     }
     announce_bytes = json.dumps(payload).encode("utf-8")
+    local_ip = get_lan_ip()
+    print(f"[DEBUG] CoAP Announce: Local IP: {local_ip}, Payload: {payload}")
     while True:
         try:
             msg = aiocoap.Message(code=aiocoap.POST, payload=announce_bytes)
             msg.set_request_uri("coap://224.0.1.187:5683/announce")
+            print(f"[DEBUG] Sending CoAP announce to 224.0.1.187:5683/announce")
             await protocol.request(msg).response  # Updated for modern aiocoap
             print("Sent CoAP announce")
         except Exception as e:
-            print(f"CoAP error: {e}")
+            print(f"[ERROR] CoAP error: {e}")
+            traceback.print_exc()
         await asyncio.sleep(30)
 
 # --- Startup ---
@@ -154,6 +159,7 @@ async def startup_event():
     try:
         zeroconf = Zeroconf()
         ip = socket.inet_aton(get_lan_ip())
+        print(f"[DEBUG] mDNS: Registering service with IP: {get_lan_ip()}, Port: {HTTP_PORT}, Name: {DEVICE_NAME}")
         info = ServiceInfo(
             "_http._tcp.local.",
             f"{DEVICE_NAME}._http._tcp.local.",
@@ -165,9 +171,9 @@ async def startup_event():
         zeroconf.register_service(info)
         print(f"mDNS registered: {DEVICE_NAME}.local:{HTTP_PORT}")
     except Exception as e:
+        print(f"[ERROR] mDNS error: {e}")
+        traceback.print_exc()
         if platform.system().lower() == "windows":
-            print(f"mDNS error: {e} (Note: mDNS/zeroconf may not work in Docker on Windows. Run natively or use Linux for full support.)")
-        else:
-            print(f"mDNS error: {e}")
+            print(f"Note: mDNS/zeroconf may not work in Docker on Windows. Run natively or use Linux for full support.")
 
     asyncio.create_task(coap_announce())
